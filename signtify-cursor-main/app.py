@@ -1005,4 +1005,6 @@ if __name__ == "__main__":
     print("   GET  http://127.0.0.1:5001/assistant/analyze")
     print("=" * 60 + "\n")
 
-    app.run(debug=True, port=5001, use_reloader=False)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
