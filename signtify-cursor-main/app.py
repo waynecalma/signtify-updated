@@ -772,17 +772,46 @@ def predict():
         b_prob = float(letter_pred[2].get("b", 0.0)) if letter_pred is not None else 0.0
 
         # --- Word model path (sequence-based) ---
-        sequence_input = np.expand_dims(sequence_array, axis=0)
-        sequence_mirror = _mirror_and_swap_sequence(sequence_array)
-        sequence_mirror_input = np.expand_dims(sequence_mirror, axis=0)
+        # Some deployments may boot with a legacy fallback model whose input shape
+        # differs from the active API payload shape (SEQ_LEN, FEATURE_DIM).
+        word_model_usable = True
+        model_input_shape = getattr(model, "input_shape", None)
+        if (
+            isinstance(model_input_shape, (tuple, list))
+            and len(model_input_shape) >= 3
+        ):
+            expected_seq = model_input_shape[1]
+            expected_feat = model_input_shape[2]
+            if (
+                expected_seq is not None
+                and expected_feat is not None
+                and (int(expected_seq) != int(SEQ_LEN) or int(expected_feat) != int(FEATURE_DIM))
+            ):
+                word_model_usable = False
+                print(
+                    " * [warn] Skipping GRU inference: "
+                    f"model expects {(expected_seq, expected_feat)} but request uses {(SEQ_LEN, FEATURE_DIM)}"
+                )
 
-        res_orig = model.predict(sequence_input, verbose=0)[0]
-        res_mirror = model.predict(sequence_mirror_input, verbose=0)[0]
-        res = ((1.0 - MIRROR_BLEND_RATIO) * res_orig) + (MIRROR_BLEND_RATIO * res_mirror)
-        word_idx = int(np.argmax(res))
-        word = str(actions[word_idx])
-        word_conf = float(res[word_idx])
-        word_probs = {str(actions[i]): float(res[i]) for i in range(len(actions))}
+        word = "nothing"
+        word_conf = 0.0
+        word_probs = {"nothing": 1.0}
+        if word_model_usable:
+            try:
+                sequence_input = np.expand_dims(sequence_array, axis=0)
+                sequence_mirror = _mirror_and_swap_sequence(sequence_array)
+                sequence_mirror_input = np.expand_dims(sequence_mirror, axis=0)
+
+                res_orig = model.predict(sequence_input, verbose=0)[0]
+                res_mirror = model.predict(sequence_mirror_input, verbose=0)[0]
+                res = ((1.0 - MIRROR_BLEND_RATIO) * res_orig) + (MIRROR_BLEND_RATIO * res_mirror)
+                word_idx = int(np.argmax(res))
+                word = str(actions[word_idx])
+                word_conf = float(res[word_idx])
+                word_probs = {str(actions[i]): float(res[i]) for i in range(len(actions))}
+            except Exception as e:
+                word_model_usable = False
+                print(f" * [warn] GRU inference failed, falling back to non-word paths: {e}")
 
         # --- Number path (heuristic 0-5) ---
         number_pred = _predict_number_temporal(hand_seq63)
@@ -798,7 +827,13 @@ def predict():
         )
 
         # --- Merge decision ---
-        if wants_words and motion >= MOTION_WORD_THRESHOLD and word in WORD_PRIORITY and word_conf >= WORD_CONF_THRESHOLD:
+        if (
+            wants_words
+            and word_model_usable
+            and motion >= MOTION_WORD_THRESHOLD
+            and word in WORD_PRIORITY
+            and word_conf >= WORD_CONF_THRESHOLD
+        ):
             prediction_sign = word
             confidence = word_conf
             all_probs = word_probs
@@ -870,7 +905,12 @@ def predict():
             confidence = max(0.58, b_prob)
             all_probs = {"b": float(confidence)}
             source = "rule_b_shape_soft"
-        elif wants_words and word in WORD_PRIORITY and word_conf >= WORD_FALLBACK_CONF_THRESHOLD:
+        elif (
+            wants_words
+            and word_model_usable
+            and word in WORD_PRIORITY
+            and word_conf >= WORD_FALLBACK_CONF_THRESHOLD
+        ):
             prediction_sign = word
             confidence = word_conf
             all_probs = word_probs
@@ -949,6 +989,7 @@ def predict():
                 "b_prob": float(b_prob),
                 "letter_margin": (float(letter_pred[3]) if letter_pred is not None else 0.0),
                 "number_support": (float(number_pred[2]) if number_pred is not None else 0.0),
+                "word_model_usable": bool(word_model_usable),
                 "top_label": str(quality_stats["top_label"]),
                 "top_conf": float(quality_stats["top_conf"]),
                 "second_label": str(quality_stats["second_label"]),
