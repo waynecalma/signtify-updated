@@ -8,7 +8,7 @@ import { getUserProfile } from '../auth/firestoreUtils';
 import '../styles/pages/ProficiencyExams.css';
 
 function Quizzes() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const [quizzes, setQuizzes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -124,6 +124,8 @@ function Quizzes() {
   }, [categoryLessons, completedLessons]);
 
   const isCategoryUnlocked = (category) => {
+    if (isAdmin) return true;
+
     // Global lock: first-time users must complete at least one lesson
     if (!completedLessons.length) return false;
     if (!category) return true;
@@ -203,7 +205,9 @@ function Quizzes() {
       <div className="card" style={{ marginBottom: '20px', background: '#f5f7fb' }}>
         <h3 style={{ marginTop: 0 }}>🔐 Lesson-locked Quizzes</h3>
         <p style={{ marginBottom: '10px', color: '#555' }}>
-          {completedLessons.length === 0
+          {isAdmin
+            ? 'Admin access: all mini quizzes are fully unlocked.'
+            : completedLessons.length === 0
             ? 'Mini quizzes are locked until you complete your first lesson. Finish Alphabet (or any lesson) to unlock your first Mini Quiz and Proficiency Exam.'
             : 'Mini quizzes unlock sequentially. Finish Alphabet first, then complete each category lesson to access the next quiz.'}
         </p>

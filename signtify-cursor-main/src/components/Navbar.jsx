@@ -98,6 +98,15 @@ function Navbar() {
         setHasCompletedFirstLesson(false);
         return;
       }
+
+      if (isAdmin) {
+        setAlphabetFinished(true);
+        setGreetingsFinished(true);
+        setDailyConversationFinished(true);
+        setHasCompletedFirstLesson(true);
+        return;
+      }
+
       const [alphabetDone, greetingsDone, dailyConvDone, profile] = await Promise.all([
         canCompleteLesson(currentUser.uid, 'alphabet', 26),
         canCompleteLesson(currentUser.uid, 'greetings', 12),
@@ -128,7 +137,7 @@ function Navbar() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(interval);
     };
-  }, [currentUser, location.pathname]);
+  }, [currentUser, isAdmin, location.pathname]);
 
   return (
     <>

@@ -170,7 +170,7 @@ const GREETING_DESCRIPTIONS = {
 };
 
 function LessonGreetings() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
   const greetings = [
     'Hello', 'Goodbye', 'Good Morning', 'Good Night', 'Good afternoon',
@@ -222,13 +222,14 @@ function LessonGreetings() {
   useEffect(() => {
     const guard = async () => {
       if (!currentUser) return;
+      if (isAdmin) return;
       const alphabetFinished = await canCompleteLesson(currentUser.uid, 'alphabet', 26);
       if (!alphabetFinished) {
         navigate('/lessons/alphabet');
       }
     };
     guard();
-  }, [currentUser, navigate]);
+  }, [currentUser, isAdmin, navigate]);
 
   const checkCompletionStatus = async () => {
     if (currentUser) {
@@ -257,7 +258,7 @@ function LessonGreetings() {
         const locked = new Set();
         const lastIndex = progress?.lastViewedIndex ?? -1;
         greetings.forEach((greeting, index) => {
-          if (index > lastIndex + 1) {
+          if (!isAdmin && index > lastIndex + 1) {
             locked.add(greeting);
           }
         });
@@ -272,7 +273,7 @@ function LessonGreetings() {
     if (!currentUser) return;
     
     // Check if greeting is locked
-    if (lockedGreetings.has(greeting)) {
+    if (!isAdmin && lockedGreetings.has(greeting)) {
       const nextIndex = (lessonProgress?.lastViewedIndex ?? -1) + 1;
       const nextGreeting = greetings[nextIndex] || 'the next greeting';
       alert(`Please view greetings in order. You need to view "${nextGreeting}" first.`);
@@ -333,7 +334,7 @@ function LessonGreetings() {
         )}
         <div className="greeting-grid">
           {greetings.map((greeting, index) => {
-            const isLocked = lockedGreetings.has(greeting);
+            const isLocked = !isAdmin && lockedGreetings.has(greeting);
             const isViewed = lessonProgress?.viewedItems?.includes(greeting);
             return (
               <button
@@ -451,7 +452,7 @@ function LessonGreetings() {
             <Link to="/lessons/alphabet">
               <button className="secondary">← Back: Alphabet</button>
             </Link>
-            {isCompleted ? (
+            {(isCompleted || isAdmin) ? (
               <Link to="/lessons/numbers">
                 <button className="secondary">Next: Numbers →</button>
               </Link>

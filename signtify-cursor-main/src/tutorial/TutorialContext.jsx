@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { getUserProfile, updateUserProfile } from '../auth/firestoreUtils';
+import { canCompleteLesson, getUserProfile, updateUserProfile } from '../auth/firestoreUtils';
 
 const TutorialContext = createContext({});
 
@@ -9,7 +9,7 @@ export const useTutorial = () => {
 };
 
 export const TutorialProvider = ({ children }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   
   const [isActive, setIsActive] = useState(false);
   const [currentTour, setCurrentTour] = useState(null);
@@ -18,6 +18,29 @@ export const TutorialProvider = ({ children }) => {
   const [showTutorialOnStartup, setShowTutorialOnStartup] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
 
+  const isOldUserWithFullFeatureAccess = useCallback(async (uid, profile) => {
+    if (!uid || !profile) return false;
+
+    const completedLessons = profile?.progress?.lessonsCompleted || [];
+    if (completedLessons.length === 0) {
+      return false;
+    }
+
+    try {
+      // Match the same lesson unlock gates used in navigation.
+      const [alphabetUnlocked, greetingsUnlocked, numbersUnlocked] = await Promise.all([
+        canCompleteLesson(uid, 'alphabet', 26),
+        canCompleteLesson(uid, 'greetings', 12),
+        canCompleteLesson(uid, 'numbers', 10)
+      ]);
+
+      return alphabetUnlocked && greetingsUnlocked && numbersUnlocked;
+    } catch (error) {
+      console.error('Error checking full feature access for tutorial:', error);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     const loadTutorialStatus = async () => {
       if (!currentUser) {
@@ -25,11 +48,35 @@ export const TutorialProvider = ({ children }) => {
         return;
       }
 
+      if (isAdmin) {
+        // Tutorial is only for new non-admin users.
+        setCompletedTours([]);
+        setShowTutorialOnStartup(false);
+        setIsLoading(false);
+        return;
+      }
+
       try {
         const profile = await getUserProfile(currentUser.uid);
         if (profile) {
+          const oldUserWithFullAccess = await isOldUserWithFullFeatureAccess(currentUser.uid, profile);
+          const shouldShowTutorialOnStartup = oldUserWithFullAccess
+            ? false
+            : profile.showTutorialOnStartup !== false;
+
           setCompletedTours(profile.completedTours || []);
-          setShowTutorialOnStartup(profile.showTutorialOnStartup !== false);
+          setShowTutorialOnStartup(shouldShowTutorialOnStartup);
+
+          // Persist auto-disable for old users so next sessions stay consistent.
+          if (oldUserWithFullAccess && profile.showTutorialOnStartup !== false) {
+            try {
+              await updateUserProfile(currentUser.uid, {
+                showTutorialOnStartup: false
+              });
+            } catch (persistError) {
+              console.error('Error persisting old-user tutorial preference:', persistError);
+            }
+          }
         }
       } catch (error) {
         console.error('Error loading tutorial status:', error);
@@ -45,7 +92,7 @@ export const TutorialProvider = ({ children }) => {
     };
 
     loadTutorialStatus();
-  }, [currentUser]);
+  }, [currentUser, isAdmin, isOldUserWithFullFeatureAccess]);
 
   useEffect(() => {
     const status = {
@@ -155,12 +202,12 @@ export const TutorialProvider = ({ children }) => {
   }, [currentUser]);
 
   const startMainTourIfFirstTime = useCallback(() => {
-    if (!isLoading && showTutorialOnStartup && !isTourCompleted('main')) {
+    if (!isAdmin && !isLoading && showTutorialOnStartup && !isTourCompleted('main')) {
       setTimeout(() => {
         startTour('main');
       }, 1000);
     }
-  }, [isLoading, showTutorialOnStartup, isTourCompleted, startTour]);
+  }, [isAdmin, isLoading, showTutorialOnStartup, isTourCompleted, startTour]);
 
   const value = {
     isActive,

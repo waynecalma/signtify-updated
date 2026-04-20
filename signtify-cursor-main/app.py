@@ -22,6 +22,10 @@ from ml.model_definition import build_sequence_gru_model
 app = Flask(__name__)
 CORS(app)
 
+# Must match frontend: .env.development VITE_FLASK_PREDICT_URL (override with PORT=...)
+SERVER_PORT = int(os.environ.get("PORT", 5001))
+FLASK_HOST = os.environ.get("FLASK_HOST", "127.0.0.1")
+
 # --- Load Model from Separate Files ---
 print(" * Loading Keras model... Please wait.")
 
@@ -38,14 +42,15 @@ LETTER_LABELS = [
     "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
     "del", "space", "nothing",
 ]
-WORD_PRIORITY = {"hello", "thanks", "yes", "no"}
+# All "word" classes from DEFAULT_LABELS (excl. nothing) — include iloveyou for Words-only mode.
+WORD_PRIORITY = {"hello", "thanks", "iloveyou", "yes", "no"}
 LETTER_CONF_THRESHOLD = 0.54
 LETTER_K_CONF_THRESHOLD = 0.48
 LETTER_MIN_MARGIN = 0.06
-WORD_CONF_THRESHOLD = 0.50
-WORD_FALLBACK_CONF_THRESHOLD = 0.35
+WORD_CONF_THRESHOLD = 0.38
+WORD_FALLBACK_CONF_THRESHOLD = 0.22
 NUMBER_CONF_THRESHOLD = 0.68
-MOTION_WORD_THRESHOLD = 0.012
+MOTION_WORD_THRESHOLD = 0.004
 MOTION_NUMBER_MAX = 0.020
 LETTER_TEMPORAL_WINDOW = 7
 NUMBER_TEMPORAL_WINDOW = 7
@@ -59,8 +64,8 @@ NUMBER_SOFT_MIN_SUPPORT = 0.35
 
 # Final anti-hallucination gates.
 FINAL_MIN_CONF = {
-    "words_gru": 0.52,
-    "words_gru_fallback": 0.45,
+    "words_gru": 0.38,
+    "words_gru_fallback": 0.30,
     "letters_cnn": 0.56,
     "letters_cnn_rule_b": 0.52,
     "letters_cnn_soft": 0.42,
@@ -69,8 +74,8 @@ FINAL_MIN_CONF = {
     "numbers_heuristic_soft": 0.55,
 }
 FINAL_MIN_MARGIN = {
-    "words_gru": 0.10,
-    "words_gru_fallback": 0.08,
+    "words_gru": 0.04,
+    "words_gru_fallback": 0.03,
     "letters_cnn": 0.08,
     "letters_cnn_rule_b": 0.07,
     "letters_cnn_soft": 0.04,
@@ -79,8 +84,8 @@ FINAL_MIN_MARGIN = {
     "numbers_heuristic_soft": 0.0,
 }
 FINAL_MAX_NORM_ENTROPY = {
-    "words_gru": 0.78,
-    "words_gru_fallback": 0.84,
+    "words_gru": 0.90,
+    "words_gru_fallback": 0.90,
     "letters_cnn": 0.82,
     "letters_cnn_rule_b": 0.84,
     "letters_cnn_soft": 0.92,
@@ -104,6 +109,42 @@ STABILITY_BYPASS_CONF = 0.90
 ASSISTANT_EVENT_WINDOW = 240
 ASSISTANT_ANALYZE_DEFAULT_LIMIT = 120
 ASSISTANT_MIN_EVENTS_FOR_ADVICE = 20
+
+
+def _best_priority_word_from_probs(word_probs: dict[str, float]) -> tuple[str, float] | None:
+    """Highest-probability label among WORD_PRIORITY (for live demos when argmax is 'nothing')."""
+    lc = {str(k).strip().lower(): float(v) for k, v in word_probs.items()}
+    best_w = None
+    best_p = 0.0
+    for w in WORD_PRIORITY:
+        p = float(lc.get(w, 0.0) or 0.0)
+        if p > best_p:
+            best_p = p
+            best_w = w
+    if best_w is None:
+        return None
+    return best_w, best_p
+
+
+def _soft_pick_word_for_words_mode(
+    word: str,
+    word_conf: float,
+    word_probs: dict[str, float],
+) -> tuple[str, float]:
+    """
+    If the GRU argmax is 'nothing' but a hello/thanks/... class still has usable mass, use it.
+    Otherwise Words-only mode feels 'dead' while Numbers still works (geometry path).
+    """
+    w = str(word).strip().lower()
+    if w in WORD_PRIORITY and w != "nothing" and word_conf >= 0.24:
+        return w, float(word_conf)
+    alt = _best_priority_word_from_probs(word_probs)
+    if alt is None:
+        return word, float(word_conf)
+    alt_label, alt_conf = alt
+    if alt_conf >= 0.18:
+        return alt_label, alt_conf
+    return word, float(word_conf)
 
 
 def _pick_primary_hand(frame126: np.ndarray) -> tuple[np.ndarray, str, float]:
@@ -581,6 +622,11 @@ def _apply_temporal_stability_gate(
     if prediction_sign == "nothing":
         return prediction_sign, confidence, {"nothing": 1.0}, source
 
+    # Words path is already filtered; requiring 2 identical backend votes kills live demos.
+    src = str(source or "")
+    if src.startswith("words_gru") and float(confidence) >= 0.30:
+        return prediction_sign, confidence, {}, source
+
     if confidence >= STABILITY_BYPASS_CONF:
         return prediction_sign, confidence, {}, source
 
@@ -688,7 +734,7 @@ try:
             "No model_weights_only.weights.h5, model_weights_only.h5, or best_sign_language_model.h5 found!"
         )
 
-    print(" * Model ready. Server is running at http://127.0.0.1:5001/")
+    print(f" * Model ready. Bind target: http://{FLASK_HOST}:{SERVER_PORT}/ (set PORT / FLASK_HOST to change)")
     print(f" * Model expects input shape: (None, {SEQ_LEN}, {FEATURE_DIM})")
     print(f" * Actions ({len(actions)}): {actions}")
 
@@ -809,6 +855,10 @@ def predict():
                 word = str(actions[word_idx])
                 word_conf = float(res[word_idx])
                 word_probs = {str(actions[i]): float(res[i]) for i in range(len(actions))}
+                if wants_words:
+                    word, word_conf = _soft_pick_word_for_words_mode(
+                        str(word), float(word_conf), word_probs
+                    )
             except Exception as e:
                 word_model_usable = False
                 print(f" * [warn] GRU inference failed, falling back to non-word paths: {e}")
@@ -981,6 +1031,7 @@ def predict():
             "confidence": confidence,
             "source": source,
             "motion": motion,
+            "letter_model_loaded": letter_model is not None,
             "all_probabilities": all_probs,
             "diagnostics": {
                 "hand_side": hand_side,
@@ -1075,13 +1126,40 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Flask server starting...")
     print("=" * 60)
-    print("Endpoints:")
-    print("   POST http://127.0.0.1:5001/predict")
-    print("   POST http://127.0.0.1:5001/record")
-    print("   GET  http://127.0.0.1:5001/health")
-    print("   GET  http://127.0.0.1:5001/assistant/analyze")
+    base = f"http://127.0.0.1"
+    print("Endpoints (use the port that binds successfully):")
+    print(f"   POST {base}:{SERVER_PORT}/predict")
+    print(f"   POST {base}:{SERVER_PORT}/record")
+    print(f"   GET  {base}:{SERVER_PORT}/health")
+    print(f"   GET  {base}:{SERVER_PORT}/assistant/analyze")
     print("=" * 60 + "\n")
 
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    fallback_ports = [SERVER_PORT, 5050, 8765, 8080, 5000]
+    ports_to_try = list(dict.fromkeys(fallback_ports))
+
+    last_err = None
+    for port in ports_to_try:
+        try:
+            if port != SERVER_PORT:
+                print(f" * Retrying bind on port {port} (previous port failed)...")
+                print(
+                    f" * If the server starts, set VITE_FLASK_PREDICT_URL=http://127.0.0.1:{port}/predict "
+                    f"or run: set PORT={port}"
+                )
+            app.run(host=FLASK_HOST, port=port, debug=False)
+            break
+        except OSError as e:
+            last_err = e
+            code = getattr(e, "winerror", None) or getattr(e, "errno", None)
+            msg = str(e).lower()
+            # 10013: access denied; 10048: address in use (Windows)
+            if code in (10013, 10048) or "forbidden" in msg or "permission" in msg or "already in use" in msg:
+                print(f" * [warn] Could not bind {FLASK_HOST}:{port} — {e}")
+                continue
+            raise
+    else:
+        print("\n * [error] Could not bind to any of these ports:", ports_to_try)
+        print("   On Windows: another app may be using the port, or Hyper-V reserved the range.")
+        print("   Try:  set PORT=8765   then run again, or run: netsh int ipv4 show excludedportrange protocol=tcp")
+        if last_err:
+            raise last_err

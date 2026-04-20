@@ -127,7 +127,7 @@ const SIGN_DESCRIPTIONS = {
 };
 
 function LessonDailyConversation() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
 
   const [selectedSign, setSelectedSign] = useState('Yes');
@@ -144,13 +144,14 @@ function LessonDailyConversation() {
   useEffect(() => {
     const guard = async () => {
       if (!currentUser) return;
+      if (isAdmin) return;
       const numbersFinished = await canCompleteLesson(currentUser.uid, 'numbers', 10);
       if (!numbersFinished) {
         navigate('/lessons/numbers');
       }
     };
     guard();
-  }, [currentUser, navigate]);
+  }, [currentUser, isAdmin, navigate]);
 
   const checkCompletionStatus = async () => {
     if (currentUser) {
@@ -176,7 +177,7 @@ function LessonDailyConversation() {
         const locked = new Set();
         const lastIndex = progress?.lastViewedIndex ?? -1;
         DAILY_SIGNS.forEach((sign, index) => {
-          if (index > lastIndex + 1) {
+          if (!isAdmin && index > lastIndex + 1) {
             locked.add(sign);
           }
         });
@@ -190,7 +191,7 @@ function LessonDailyConversation() {
   const handleSignClick = async (sign, index) => {
     if (!currentUser) return;
 
-    if (lockedSigns.has(sign)) {
+    if (!isAdmin && lockedSigns.has(sign)) {
       const nextIndex = (lessonProgress?.lastViewedIndex ?? -1) + 1;
       const nextSign = DAILY_SIGNS[nextIndex] || 'the next sign';
       alert(`Please view signs in order. You need to view "${nextSign}" first.`);
@@ -249,7 +250,7 @@ function LessonDailyConversation() {
 
         <div className="greeting-grid">
           {DAILY_SIGNS.map((sign, index) => {
-            const isLocked = lockedSigns.has(sign);
+            const isLocked = !isAdmin && lockedSigns.has(sign);
             const isViewed = lessonProgress?.viewedItems?.includes(sign);
             return (
               <button

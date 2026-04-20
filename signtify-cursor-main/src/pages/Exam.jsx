@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../auth/firebase';
 import { useAuth } from '../auth/AuthContext';
 import { saveExamResult, getUserProfile } from '../auth/firestoreUtils';
@@ -9,7 +9,7 @@ import '../styles/pages/Quiz.css';
 function Exam() {
   const { examId } = useParams();
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   
   const [exam, setExam] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -32,14 +32,74 @@ function Exam() {
   const loadExam = async () => {
     try {
       setLoading(true);
-      const examRef = doc(db, 'exams', examId);
-      const examDoc = await getDoc(examRef);
-      
-      if (examDoc.exists()) {
-        setExam({ id: examDoc.id, ...examDoc.data() });
-      } else {
-        setError('Exam not found');
+      if (!currentUser) {
+        setError('Please sign in to access exams.');
+        return;
       }
+      
+      const [examDoc, allExamsSnapshot, profile] = await Promise.all([
+        getDoc(doc(db, 'exams', examId)),
+        getDocs(collection(db, 'exams')),
+        getUserProfile(currentUser.uid)
+      ]);
+
+      if (!examDoc.exists()) {
+        setError('Exam not found');
+        return;
+      }
+
+      const currentExam = { id: examDoc.id, ...examDoc.data() };
+      if (isAdmin) {
+        setExam(currentExam);
+        return;
+      }
+
+      const completedLessons = profile?.progress?.lessonsCompleted || [];
+      const passedExams = profile?.progress?.examsPassed || [];
+      const passedExamIds = new Set(
+        passedExams
+          .filter(e => e?.passed === true || e?.percentage >= 80)
+          .map(e => e.examId)
+      );
+
+      const allExams = [];
+      allExamsSnapshot.forEach((examDocItem) => {
+        allExams.push({ id: examDocItem.id, ...examDocItem.data() });
+      });
+      allExams.forEach((examItem, idx) => {
+        if (examItem.order === undefined || examItem.order === null) {
+          examItem.order = idx + 1;
+        }
+      });
+      allExams.sort((a, b) => (a.order || 999) - (b.order || 999));
+
+      const currentExamIndex = allExams.findIndex(item => item.id === examId);
+      if (currentExamIndex === -1) {
+        setError('Exam not found');
+        return;
+      }
+
+      const hasAnyLessonCompleted = completedLessons.length > 0;
+      const isAlreadyPassed = passedExamIds.has(examId);
+      let isUnlocked = false;
+
+      if (!hasAnyLessonCompleted) {
+        isUnlocked = false;
+      } else if (currentExamIndex === 0) {
+        isUnlocked = true;
+      } else if (isAlreadyPassed) {
+        isUnlocked = true;
+      } else {
+        const previousExamId = allExams[currentExamIndex - 1]?.id;
+        isUnlocked = previousExamId ? passedExamIds.has(previousExamId) : false;
+      }
+
+      if (!isUnlocked) {
+        setError('This proficiency exam is locked. Complete the required lesson/exam first.');
+        return;
+      }
+
+      setExam(currentExam);
     } catch (err) {
       console.error('Error loading exam:', err);
       setError('Failed to load exam');

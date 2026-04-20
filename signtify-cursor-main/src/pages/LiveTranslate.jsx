@@ -4,7 +4,7 @@ import Handsigns from "../handsigns/index.js";
 
 function LiveTranslate() {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);<s></s>
+  const canvasRef = useRef(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [detectedSign, setDetectedSign] = useState(null);
   const [translationHistory, setTranslationHistory] = useState([]);
@@ -33,7 +33,9 @@ function LiveTranslate() {
   
   const sequenceLength = 30;
   const predictionIntervalRef = useRef(null);
-  const FLASK_SERVER_URL = (import.meta.env.VITE_FLASK_PREDICT_URL || 'http://127.0.0.1:5000/predict').trim();
+  const FLASK_SERVER_URL = (import.meta.env.VITE_FLASK_PREDICT_URL || 'http://127.0.0.1:5001/predict').trim();
+  const FLASK_HEALTH_URL = FLASK_SERVER_URL.replace(/\/predict\/?$/i, '/health');
+  const [serverHealth, setServerHealth] = useState(null);
   const CONFIDENCE_THRESHOLD_BY_MODE = {
     letters: 0.35,
     numbers: 0.5,
@@ -45,7 +47,7 @@ function LiveTranslate() {
     words: 3
   };
   const FINGERPOSE_MATCH_SCORE = 4.8;
-  const FINGERPOSE_MIN_CONFIDENCE = 0.28;
+  const FINGERPOSE_MIN_CONFIDENCE = 0.22;
   const FINGERPOSE_FOLDED_MIN_CONFIDENCE = 0.18;
   const LETTER_ONLY_INTERVAL_MS = 180;
   const DEFAULT_INTERVAL_MS = 500;
@@ -55,7 +57,8 @@ function LiveTranslate() {
   const FOLDED_FINGER_LETTERS = new Set(['a', 's', 't', 'm', 'n', 'e']);
   const isLetter = (value) => /^[a-z]$/i.test(String(value || ''));
   const isNumber = (value) => /^(?:[0-9]|10)$/.test(String(value || ''));
-  const isWord = (value) => ['hello', 'thanks', 'yes', 'no'].includes(String(value || '').toLowerCase());
+  const isWord = (value) =>
+    ['hello', 'thanks', 'iloveyou', 'yes', 'no'].includes(String(value || '').toLowerCase());
 
   const isAllowedForMode = (value, mode) => {
     if (mode === 'letters') return isLetter(value);
@@ -359,15 +362,28 @@ function LiveTranslate() {
       }
 
       const data = await response.json();
-      
+
+      const predictedSign = data.prediction;
+      const conf = Number(data.confidence ?? 0);
+
       // Store all probabilities for debugging
       if (data.all_probabilities) {
         setAllProbabilities(data.all_probabilities);
       }
 
+      // Letters mode needs the optional CNN letter model on the server; if it's missing, GRU only outputs word classes.
+      if (
+        mode === 'letters'
+        && String(predictedSign).toLowerCase() === 'nothing'
+        && data.letter_model_loaded === false
+      ) {
+        setDetectionStatus('Letter model offline on server — use Words mode (hello/thanks/yes/no) or fix letter CNN in Flask logs');
+        setDetectedSign(null);
+        setConfidence(Math.round(conf * 100));
+        return;
+      }
+
       // Filter out "nothing" if confidence is low
-      const predictedSign = data.prediction;
-      const conf = data.confidence;
       let finalSign = predictedSign;
       let finalConfidence = conf;
       let usedFingerposeFallback = false;
@@ -572,6 +588,11 @@ function LiveTranslate() {
       await cameraRef.current.start();
       setIsCameraActive(true);
       setDetectionStatus('Collecting frames...');
+
+      fetch(FLASK_HEALTH_URL)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((h) => setServerHealth({ ...h, ok: true, reachability: 'ok' }))
+        .catch(() => setServerHealth({ ok: false, reachability: 'unreachable' }));
       
       // Start prediction loop.
       if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
@@ -601,6 +622,7 @@ function LiveTranslate() {
     setDetectionStatus('Camera stopped');
     setDetectedSign(null);
     setConfidence(0);
+    setServerHealth(null);
     sequenceRef.current = [];
     fingerposeHandRef.current = null;
     fingerposeHandsRef.current = [];
@@ -676,6 +698,20 @@ function LiveTranslate() {
             <option value="numbers">Numbers Only</option>
             <option value="words">Words Only</option>
           </select>
+        </div>
+        <div style={{ marginTop: '12px', fontSize: '0.85rem', color: '#555', maxWidth: '720px', marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.5 }}>
+          <span style={{ color: '#7f8c8d' }}>API: </span>
+          <code style={{ fontSize: '0.8rem' }}>{FLASK_SERVER_URL}</code>
+          {serverHealth?.reachability === 'unreachable' && (
+            <p style={{ color: '#c0392b', marginTop: '8px', marginBottom: 0 }}>
+              Cannot reach Flask — confirm the URL/port matches <code>python app.py</code> and <code>PORT</code> / <code>VITE_FLASK_PREDICT_URL</code>.
+            </p>
+          )}
+          {serverHealth?.ok && serverHealth.letter_model_loaded === false && (
+            <p style={{ color: '#b7950b', marginTop: '8px', marginBottom: 0 }}>
+              Flask is up, but the letter CNN did not load (see server warnings). <strong>Letters Only</strong> will be unreliable — use <strong>Words Only</strong> for hello/thanks/yes/no, or fix the letter model file / Keras version.
+            </p>
+          )}
         </div>
       </div>
 

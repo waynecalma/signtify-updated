@@ -7,7 +7,7 @@ import { getUserProfile } from '../auth/firestoreUtils';
 import '../styles/pages/ProficiencyExams.css';
 
 function ProficiencyExams() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const [exams, setExams] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +86,15 @@ function ProficiencyExams() {
       let previousExamPassed = true;
       
       const examsWithStatus = examsData.map((exam, index) => {
+        if (isAdmin) {
+          return {
+            ...exam,
+            isUnlocked: true,
+            isPassed: passedExamIds.has(exam.id),
+            userScore: examResultsMap.get(exam.id)?.percentage || null
+          };
+        }
+
         // Check if current exam is passed
         const isPassed = passedExamIds.has(exam.id);
         const currentExamResult = examResultsMap.get(exam.id);
@@ -153,7 +162,7 @@ function ProficiencyExams() {
         <p>Progressive certification path - pass each exam with 80%+ to unlock the next</p>
       </div>
       
-      {!hasAnyLessonCompleted && (
+      {!isAdmin && !hasAnyLessonCompleted && (
         <div className="exam-requirements card">
           <h2>🔐 Locked for New Learners</h2>
           <p>Proficiency Exams unlock only after you complete your first lesson.</p>

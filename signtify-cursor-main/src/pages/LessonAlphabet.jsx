@@ -457,7 +457,7 @@ const letterInstructions = {
 };
 
 function LessonAlphabet() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
   const [selectedLetter, setSelectedLetter] = useState('A');
   const [isCompleted, setIsCompleted] = useState(false);
@@ -467,7 +467,7 @@ function LessonAlphabet() {
   useEffect(() => {
     checkCompletionStatus();
     loadLessonProgress();
-  }, [currentUser]);
+  }, [currentUser, isAdmin]);
 
   const checkCompletionStatus = async () => {
     if (currentUser) {
@@ -496,7 +496,7 @@ function LessonAlphabet() {
         const locked = new Set();
         const lastIndex = progress?.lastViewedIndex ?? -1;
         alphabet.forEach((letter, index) => {
-          if (index > lastIndex + 1) {
+          if (!isAdmin && index > lastIndex + 1) {
             locked.add(letter);
           }
         });
@@ -509,6 +509,11 @@ function LessonAlphabet() {
 
   const handleLetterClick = async (letter, index) => {
     if (!currentUser) return;
+
+    if (isAdmin) {
+      setSelectedLetter(letter);
+      return;
+    }
     
     // Check if letter is locked
     if (lockedLetters.has(letter)) {
@@ -566,16 +571,21 @@ function LessonAlphabet() {
             textAlign: 'center'
           }}>
             <strong>Progress: {lessonProgress.viewedItems?.length || 0} / {alphabet.length} letters viewed</strong>
-            {!isCompleted && (
+            {!isCompleted && !isAdmin && (
               <p style={{ marginTop: '0.5rem', color: '#666', fontSize: '0.9rem' }}>
                 View all letters from A to Z in order — the lesson will complete automatically.
+              </p>
+            )}
+            {isAdmin && (
+              <p style={{ marginTop: '0.5rem', color: '#555', fontSize: '0.9rem' }}>
+                Admin: you can open any letter in any order.
               </p>
             )}
           </div>
         )}
         <div className="letter-grid">
           {alphabet.map((letter, index) => {
-            const isLocked = lockedLetters.has(letter);
+            const isLocked = !isAdmin && lockedLetters.has(letter);
             const isViewed = lessonProgress?.viewedItems?.includes(letter);
             return (
               <button
@@ -653,12 +663,12 @@ function LessonAlphabet() {
             ✓ Lesson Completed!
           </div>
         )}
-        {!isCompleted && (
+        {!isCompleted && !isAdmin && (
           <p style={{ marginBottom: '10px', color: '#666', fontSize: '0.9rem' }}>
             Finish viewing all letters A–Z to unlock the next lesson.
           </p>
         )}
-        {isCompleted ? (
+        {(isCompleted || isAdmin) ? (
           <Link to="/lessons/greetings">
           <button className="secondary">Next: Greetings →</button>
           </Link>

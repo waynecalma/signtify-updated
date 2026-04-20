@@ -209,7 +209,7 @@ const numberInstructions = {
 };
 
 function LessonNumbers() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [selectedNumber, setSelectedNumber] = useState(1);
   const [isCompleted, setIsCompleted] = useState(false);
@@ -225,13 +225,14 @@ function LessonNumbers() {
   useEffect(() => {
     const guard = async () => {
       if (!currentUser) return;
+      if (isAdmin) return;
       const greetingsFinished = await canCompleteLesson(currentUser.uid, 'greetings', 12);
       if (!greetingsFinished) {
         navigate('/lessons/greetings');
       }
     };
     guard();
-  }, [currentUser, navigate]);
+  }, [currentUser, isAdmin, navigate]);
 
   const checkCompletionStatus = async () => {
     if (currentUser) {
@@ -256,7 +257,7 @@ function LessonNumbers() {
         const locked = new Set();
         const lastIndex = progress?.lastViewedIndex ?? -1;
         NUMBERS.forEach((num, index) => {
-          if (index > lastIndex + 1) locked.add(num);
+          if (!isAdmin && index > lastIndex + 1) locked.add(num);
         });
         setLockedNumbers(locked);
       } catch (error) {
@@ -267,7 +268,7 @@ function LessonNumbers() {
 
   const handleNumberClick = async (num, index) => {
     if (!currentUser) return;
-    if (lockedNumbers.has(num)) {
+    if (!isAdmin && lockedNumbers.has(num)) {
       const nextNum = NUMBERS[(lessonProgress?.lastViewedIndex ?? -1) + 1];
       alert(`Please view numbers in order. View ${nextNum} first.`);
       return;
@@ -322,7 +323,7 @@ function LessonNumbers() {
         )}
         <div className="letter-grid">
           {NUMBERS.map((num, index) => {
-            const isLocked = lockedNumbers.has(num);
+            const isLocked = !isAdmin && lockedNumbers.has(num);
             const isViewed = lessonProgress?.viewedItems?.includes(String(num));
             return (
               <button
@@ -417,7 +418,7 @@ function LessonNumbers() {
           <Link to="/lessons/greetings">
             <button className="secondary">← Back: Greetings</button>
           </Link>
-          {isCompleted ? (
+          {(isCompleted || isAdmin) ? (
             <Link to="/lessons/daily-conversation">
               <button className="secondary">Next: Daily Conversation →</button>
             </Link>
