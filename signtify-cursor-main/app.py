@@ -612,46 +612,54 @@ if os.path.exists("model_metadata.json"):
     FEATURE_DIM = int(metadata.get("feature_dim", FEATURE_DIM))
 
 try:
-    weights_file = next(
-        (p for p in ("model_weights_only.weights.h5", "model_weights_only.h5") if os.path.exists(p)),
-        None,
-    )
-    if weights_file:
+    candidate_weight_files = [
+        p for p in ("model_weights_only.weights.h5", "model_weights_only.h5") if os.path.exists(p)
+    ]
+    load_errors: list[str] = []
+
+    for weights_file in candidate_weight_files:
         print(" * Building architecture for", len(actions), "classes...")
-        model = build_sequence_gru_model(
+        candidate_model = build_sequence_gru_model(
             num_classes=len(actions),
             seq_len=SEQ_LEN,
             feature_dim=FEATURE_DIM,
         )
         print(f" * Loading weights from {weights_file}...")
         try:
-            model.load_weights(weights_file)
-            print(" * Weights loaded")
+            candidate_model.load_weights(weights_file)
+            model = candidate_model
+            print(f" * Weights loaded from {weights_file}")
+            break
         except Exception as weight_err:
-            # Some deployments accidentally contain a full model file renamed as *.weights.h5,
-            # or a weights file produced with a different architecture/version.
-            print(f" * [warn] Direct weight loading failed: {weight_err}")
-            print(" * [warn] Trying to load it as a full Keras model...")
-            from tensorflow.keras.models import load_model
+            # Some deployments contain stale/incompatible weight files.
+            print(f" * [warn] Direct weight loading failed for {weights_file}: {weight_err}")
+            load_errors.append(f"{weights_file} (weights): {weight_err}")
+            try:
+                print(f" * [warn] Trying to load {weights_file} as a full Keras model...")
+                from tensorflow.keras.models import load_model
 
-            loaded_model = load_model(weights_file, compile=False)
-            model = loaded_model
-            out_classes = int(model.output_shape[-1])
-            if out_classes != len(actions):
-                print(
-                    f" * [warn] Model outputs {out_classes} classes, "
-                    f"but model_labels.json has {len(actions)} labels."
-                )
-                if out_classes == len(DEFAULT_LABELS):
-                    actions = np.array(DEFAULT_LABELS)
-                    print(" * [warn] Falling back to default 6 labels for compatibility.")
-                else:
-                    # Keep server running while preserving shape consistency.
-                    actions = np.array([f"class_{i}" for i in range(out_classes)])
-                    print(" * [warn] Using generated placeholder labels to match model output.")
-            print(" * Loaded sequence model via full-model fallback")
+                loaded_model = load_model(weights_file, compile=False)
+                model = loaded_model
+                out_classes = int(model.output_shape[-1])
+                if out_classes != len(actions):
+                    print(
+                        f" * [warn] Model outputs {out_classes} classes, "
+                        f"but model_labels.json has {len(actions)} labels."
+                    )
+                    if out_classes == len(DEFAULT_LABELS):
+                        actions = np.array(DEFAULT_LABELS)
+                        print(" * [warn] Falling back to default 6 labels for compatibility.")
+                    else:
+                        # Keep server running while preserving shape consistency.
+                        actions = np.array([f"class_{i}" for i in range(out_classes)])
+                        print(" * [warn] Using generated placeholder labels to match model output.")
+                print(f" * Loaded sequence model via full-model fallback from {weights_file}")
+                break
+            except Exception as full_model_err:
+                print(f" * [warn] Full-model fallback also failed for {weights_file}: {full_model_err}")
+                load_errors.append(f"{weights_file} (full-model): {full_model_err}")
 
-    elif os.path.exists("best_sign_language_model.h5"):
+    if model is None and os.path.exists("best_sign_language_model.h5"):
         print(" * Loading legacy full model (6 classes): best_sign_language_model.h5")
         actions = np.array(DEFAULT_LABELS)
         from tensorflow.keras.models import load_model
@@ -671,7 +679,11 @@ try:
         )
         print(" * Legacy model loaded")
 
-    else:
+    if model is None:
+        if load_errors:
+            raise RuntimeError(
+                "Failed to load all candidate model files:\n - " + "\n - ".join(load_errors)
+            )
         raise FileNotFoundError(
             "No model_weights_only.weights.h5, model_weights_only.h5, or best_sign_language_model.h5 found!"
         )
