@@ -624,8 +624,32 @@ try:
             feature_dim=FEATURE_DIM,
         )
         print(f" * Loading weights from {weights_file}...")
-        model.load_weights(weights_file)
-        print(" * Weights loaded")
+        try:
+            model.load_weights(weights_file)
+            print(" * Weights loaded")
+        except Exception as weight_err:
+            # Some deployments accidentally contain a full model file renamed as *.weights.h5,
+            # or a weights file produced with a different architecture/version.
+            print(f" * [warn] Direct weight loading failed: {weight_err}")
+            print(" * [warn] Trying to load it as a full Keras model...")
+            from tensorflow.keras.models import load_model
+
+            loaded_model = load_model(weights_file, compile=False)
+            model = loaded_model
+            out_classes = int(model.output_shape[-1])
+            if out_classes != len(actions):
+                print(
+                    f" * [warn] Model outputs {out_classes} classes, "
+                    f"but model_labels.json has {len(actions)} labels."
+                )
+                if out_classes == len(DEFAULT_LABELS):
+                    actions = np.array(DEFAULT_LABELS)
+                    print(" * [warn] Falling back to default 6 labels for compatibility.")
+                else:
+                    # Keep server running while preserving shape consistency.
+                    actions = np.array([f"class_{i}" for i in range(out_classes)])
+                    print(" * [warn] Using generated placeholder labels to match model output.")
+            print(" * Loaded sequence model via full-model fallback")
 
     elif os.path.exists("best_sign_language_model.h5"):
         print(" * Loading legacy full model (6 classes): best_sign_language_model.h5")
